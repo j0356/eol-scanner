@@ -837,6 +837,148 @@ type Stats struct {
 	ProductsByCategory map[string]int
 }
 
+// LookupByCPE looks up a product by its CPE identifier
+// Supports both CPE 2.2 (cpe:/a:vendor:product) and CPE 2.3 (cpe:2.3:a:vendor:product) formats
+func (m *EOLDatabaseManager) LookupByCPE(cpeString string) (*Product, []Cycle, error) {
+	var product Product
+
+	// Try exact match first
+	err := m.db.QueryRow(`
+		SELECT p.id, p.name, p.category_id, p.category_name, p.label, p.link, p.version_command, p.aliases, p.tags
+		FROM products p
+		JOIN identifiers i ON p.id = i.product_id
+		WHERE i.identifier_type = 'cpe' AND LOWER(i.identifier_value) = LOWER(?)
+	`, cpeString).Scan(&product.ID, &product.Name, &product.CategoryID, &product.CategoryName,
+		&product.Label, &product.Link, &product.VersionCommand, &product.Aliases, &product.Tags)
+
+	if err == sql.ErrNoRows {
+		// Try prefix match (CPE without version)
+		// Remove version from CPE for matching: cpe:2.3:a:vendor:product:* -> cpe:2.3:a:vendor:product
+		pattern := cpeString + "%"
+		err = m.db.QueryRow(`
+			SELECT p.id, p.name, p.category_id, p.category_name, p.label, p.link, p.version_command, p.aliases, p.tags
+			FROM products p
+			JOIN identifiers i ON p.id = i.product_id
+			WHERE i.identifier_type = 'cpe' AND LOWER(i.identifier_value) LIKE LOWER(?)
+		`, pattern).Scan(&product.ID, &product.Name, &product.CategoryID, &product.CategoryName,
+			&product.Label, &product.Link, &product.VersionCommand, &product.Aliases, &product.Tags)
+	}
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+
+	cycles, err := m.GetProductCycles(product.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &product, cycles, nil
+}
+
+// LookupByPURLPrefix looks up a product by matching a PURL prefix pattern
+// For example, pkg:pypi/django would match pkg:pypi/django in the database
+func (m *EOLDatabaseManager) LookupByPURLPrefix(purlType, packageName string) (*Product, []Cycle, error) {
+	var product Product
+
+	// Construct a pattern to match: pkg:<type>/<name> or pkg:<type>/%40<scope>/<name>
+	pattern := fmt.Sprintf("pkg:%s/%s%%", purlType, packageName)
+	patternWithScope := fmt.Sprintf("pkg:%s/%%/%s%%", purlType, packageName)
+
+	err := m.db.QueryRow(`
+		SELECT p.id, p.name, p.category_id, p.category_name, p.label, p.link, p.version_command, p.aliases, p.tags
+		FROM products p
+		JOIN identifiers i ON p.id = i.product_id
+		WHERE i.identifier_type = 'purl' AND (
+			LOWER(i.identifier_value) LIKE LOWER(?) OR
+			LOWER(i.identifier_value) LIKE LOWER(?)
+		)
+	`, pattern, patternWithScope).Scan(&product.ID, &product.Name, &product.CategoryID, &product.CategoryName,
+		&product.Label, &product.Link, &product.VersionCommand, &product.Aliases, &product.Tags)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+
+	cycles, err := m.GetProductCycles(product.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &product, cycles, nil
+}
+
+// LookupByName looks up a product by name, checking product name, aliases, and repology identifiers
+func (m *EOLDatabaseManager) LookupByName(name string, pkgType string) (*Product, []Cycle, error) {
+	var product Product
+
+	// Normalize the name for matching
+	normalizedName := normalizePackageName(name)
+
+	// Try exact product name match first
+	err := m.db.QueryRow(`
+		SELECT id, name, category_id, category_name, label, link, version_command, aliases, tags
+		FROM products WHERE LOWER(name) = LOWER(?)
+	`, normalizedName).Scan(&product.ID, &product.Name, &product.CategoryID, &product.CategoryName,
+		&product.Label, &product.Link, &product.VersionCommand, &product.Aliases, &product.Tags)
+
+	if err == sql.ErrNoRows {
+		// Try matching against aliases
+		err = m.db.QueryRow(`
+			SELECT id, name, category_id, category_name, label, link, version_command, aliases, tags
+			FROM products WHERE aliases LIKE ?
+		`, "%\""+normalizedName+"\"%").Scan(&product.ID, &product.Name, &product.CategoryID, &product.CategoryName,
+			&product.Label, &product.Link, &product.VersionCommand, &product.Aliases, &product.Tags)
+	}
+
+	if err == sql.ErrNoRows {
+		// Try matching via repology identifier
+		err = m.db.QueryRow(`
+			SELECT p.id, p.name, p.category_id, p.category_name, p.label, p.link, p.version_command, p.aliases, p.tags
+			FROM products p
+			JOIN identifiers i ON p.id = i.product_id
+			WHERE i.identifier_type = 'repology' AND LOWER(i.identifier_value) = LOWER(?)
+		`, normalizedName).Scan(&product.ID, &product.Name, &product.CategoryID, &product.CategoryName,
+			&product.Label, &product.Link, &product.VersionCommand, &product.Aliases, &product.Tags)
+	}
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+
+	cycles, err := m.GetProductCycles(product.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &product, cycles, nil
+}
+
+// normalizePackageName normalizes a package name for matching
+func normalizePackageName(name string) string {
+	// Common suffixes to strip for matching
+	suffixes := []string{"-dev", "-devel", "-libs", "-common", "-bin", "-tools", "-utils"}
+	result := name
+
+	for _, suffix := range suffixes {
+		if len(result) > len(suffix) && result[len(result)-len(suffix):] == suffix {
+			result = result[:len(result)-len(suffix)]
+			break
+		}
+	}
+
+	return result
+}
+
 // GetStats returns database statistics
 func (m *EOLDatabaseManager) GetStats() (*Stats, error) {
 	stats := &Stats{

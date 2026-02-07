@@ -158,6 +158,29 @@ func outputTable(summary *scanning.ScanSummary) error {
 	fmt.Printf("Forward Lookup: %d days\n", summary.ForwardLookupDays)
 	fmt.Println(strings.Repeat("-", 80))
 
+	// Print OS/Distribution info if available
+	if summary.OS != nil {
+		fmt.Printf("\nOperating System:\n")
+		osName := summary.OS.PrettyName
+		if osName == "" {
+			osName = fmt.Sprintf("%s %s", summary.OS.Name, summary.OS.Version)
+		}
+		fmt.Printf("  Distribution:       %s\n", osName)
+		if summary.OS.MatchedProduct != "" {
+			fmt.Printf("  Matched Product:    %s\n", summary.OS.MatchedProduct)
+		}
+		fmt.Printf("  Status:             %s\n", statusSymbol(summary.OS.Status))
+		if summary.OS.EOLDate != "" {
+			fmt.Printf("  EOL Date:           %s\n", summary.OS.EOLDate)
+		}
+		if summary.OS.DaysUntilEOL != nil {
+			fmt.Printf("  Days Until EOL:     %d\n", *summary.OS.DaysUntilEOL)
+		}
+		if summary.OS.IsLTS {
+			fmt.Printf("  LTS:                Yes\n")
+		}
+	}
+
 	// Print summary
 	fmt.Printf("\nSummary:\n")
 	fmt.Printf("  Total Components:   %d\n", summary.TotalComponents)

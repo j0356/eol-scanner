@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anchore/syft/syft/linux"
 	"github.com/anchore/syft/syft/pkg"
 	"github.com/anchore/syft/syft/sbom"
 	"github.com/j0356/eol-scanner/core/db"
@@ -40,6 +41,21 @@ type ComponentResult struct {
 	IsLTS          bool      `json:"is_lts"`
 }
 
+// OSInfo represents the operating system EOL information
+type OSInfo struct {
+	Name           string    `json:"name"`
+	ID             string    `json:"id"`
+	Version        string    `json:"version"`
+	VersionID      string    `json:"version_id"`
+	PrettyName     string    `json:"pretty_name"`
+	Status         EOLStatus `json:"status"`
+	EOLDate        string    `json:"eol_date,omitempty"`
+	DaysUntilEOL   *int      `json:"days_until_eol,omitempty"`
+	MatchedProduct string    `json:"matched_product,omitempty"`
+	MatchedCycle   string    `json:"matched_cycle,omitempty"`
+	IsLTS          bool      `json:"is_lts"`
+}
+
 // ScanSummary contains the overall scan results
 type ScanSummary struct {
 	TotalComponents   int               `json:"total_components"`
@@ -48,6 +64,7 @@ type ScanSummary struct {
 	ActiveComponents  int               `json:"active_components"`
 	UnknownComponents int               `json:"unknown_components"`
 	Components        []ComponentResult `json:"components"`
+	OS                *OSInfo           `json:"os,omitempty"`
 	ScanTime          time.Time         `json:"scan_time"`
 	ImageReference    string            `json:"image_reference"`
 	DBLastUpdated     string            `json:"db_last_updated"`
@@ -264,9 +281,13 @@ func (s *Scanner) analyzeSBOM(sbomResult *sbom.SBOM, imageRef string) (*ScanSumm
 		summary.DBLastUpdated = stats.LastFullSync.String
 	}
 
+	// Check OS/Distribution EOL status
+	if sbomResult.Artifacts.LinuxDistribution != nil {
+		summary.OS = s.checkOSEOL(sbomResult.Artifacts.LinuxDistribution)
+	}
+
 	// Extract packages from SBOM
 	packages := sbomResult.Artifacts.Packages.Sorted()
-	fmt.Println(packages)
 
 	for _, p := range packages {
 		result := s.checkComponent(p)
@@ -306,16 +327,217 @@ func (s *Scanner) checkComponent(p pkg.Package) ComponentResult {
 		result.PURL = p.PURL
 	}
 
-	// Try to look up by PURL
+	// Try to look up by exact PURL first
 	if result.PURL != "" {
 		product, cycles, _, err := s.dbManager.LookupByPURL(result.PURL)
 		if err == nil && product != nil {
 			result.MatchedProduct = product.Name
 			result = s.evaluateEOLStatus(result, cycles, p.Version)
+			return result
 		}
 	}
 
+	// For deb/rpm packages, try distro-specific PURL lookup
+	// Database has entries like pkg:deb/debian/nginx, pkg:deb/ubuntu/python3.12
+	if string(p.Type) == "deb" {
+		for _, distro := range []string{"debian", "ubuntu"} {
+			product, cycles, err := s.dbManager.LookupByPURLPrefix("deb/"+distro, p.Name)
+			if err == nil && product != nil {
+				result.MatchedProduct = product.Name
+				result = s.evaluateEOLStatus(result, cycles, p.Version)
+				return result
+			}
+		}
+	} else if string(p.Type) == "rpm" {
+		for _, distro := range []string{"fedora", "redhat", "centos", "amzn"} {
+			product, cycles, err := s.dbManager.LookupByPURLPrefix("rpm/"+distro, p.Name)
+			if err == nil && product != nil {
+				result.MatchedProduct = product.Name
+				result = s.evaluateEOLStatus(result, cycles, p.Version)
+				return result
+			}
+		}
+	} else if string(p.Type) == "apk" {
+		product, cycles, err := s.dbManager.LookupByPURLPrefix("apk/alpine", p.Name)
+		if err == nil && product != nil {
+			result.MatchedProduct = product.Name
+			result = s.evaluateEOLStatus(result, cycles, p.Version)
+			return result
+		}
+	}
+
+	// Try PURL type lookup for language packages (pypi, npm, gem, etc.)
+	purlType := getPURLTypeFromPackageType(string(p.Type))
+	if purlType != "" {
+		product, cycles, err := s.dbManager.LookupByPURLPrefix(purlType, p.Name)
+		if err == nil && product != nil {
+			result.MatchedProduct = product.Name
+			result = s.evaluateEOLStatus(result, cycles, p.Version)
+			return result
+		}
+	}
+
+	// Try generic PURL lookup
+	product, cycles, err := s.dbManager.LookupByPURLPrefix("generic", p.Name)
+	if err == nil && product != nil {
+		result.MatchedProduct = product.Name
+		result = s.evaluateEOLStatus(result, cycles, p.Version)
+		return result
+	}
+
+	// Try CPE matching if package has CPEs
+	if len(p.CPEs) > 0 {
+		for _, c := range p.CPEs {
+			cpeStr := c.Attributes.String()
+			product, cycles, err := s.dbManager.LookupByCPE(cpeStr)
+			if err == nil && product != nil {
+				result.MatchedProduct = product.Name
+				result = s.evaluateEOLStatus(result, cycles, p.Version)
+				return result
+			}
+		}
+	}
+
+	// Fallback: try to look up by package name (for products like nginx, postgresql, etc.)
+	product, cycles, err = s.dbManager.LookupByName(p.Name, string(p.Type))
+	if err == nil && product != nil {
+		result.MatchedProduct = product.Name
+		result = s.evaluateEOLStatus(result, cycles, p.Version)
+	}
+
 	return result
+}
+
+// checkOSEOL checks the operating system EOL status
+func (s *Scanner) checkOSEOL(distro *linux.Release) *OSInfo {
+	if distro == nil {
+		return nil
+	}
+
+	osInfo := &OSInfo{
+		Name:       distro.Name,
+		ID:         distro.ID,
+		Version:    distro.Version,
+		VersionID:  distro.VersionID,
+		PrettyName: distro.PrettyName,
+		Status:     StatusUnknown,
+	}
+
+	// Map distro ID to product name in EOL database
+	productName := mapDistroToProduct(distro.ID)
+	if productName == "" {
+		return osInfo
+	}
+
+	// Look up the OS in the database
+	product, cycles, err := s.dbManager.LookupByName(productName, "os")
+	if err != nil || product == nil {
+		return osInfo
+	}
+
+	osInfo.MatchedProduct = product.Name
+
+	// Find matching cycle based on version
+	versionToMatch := distro.VersionID
+	if versionToMatch == "" {
+		versionToMatch = distro.Version
+	}
+
+	// Evaluate EOL status using the same logic as components
+	result := ComponentResult{
+		Name:    osInfo.Name,
+		Version: versionToMatch,
+		Status:  StatusUnknown,
+	}
+	result = s.evaluateEOLStatus(result, cycles, versionToMatch)
+
+	osInfo.Status = result.Status
+	osInfo.EOLDate = result.EOLDate
+	osInfo.DaysUntilEOL = result.DaysUntilEOL
+	osInfo.MatchedCycle = result.MatchedCycle
+	osInfo.IsLTS = result.IsLTS
+
+	return osInfo
+}
+
+// mapDistroToProduct maps Linux distribution IDs to endoflife.date product names
+func mapDistroToProduct(distroID string) string {
+	// Map common distro IDs to their product names in endoflife.date
+	distroMap := map[string]string{
+		"debian":       "debian",
+		"ubuntu":       "ubuntu",
+		"alpine":       "alpine-linux",
+		"centos":       "centos",
+		"rhel":         "rhel",
+		"fedora":       "fedora",
+		"amzn":         "amazon-linux",
+		"amazonlinux":  "amazon-linux",
+		"almalinux":    "almalinux",
+		"rocky":        "rocky-linux",
+		"opensuse":     "opensuse",
+		"sles":         "sles",
+		"ol":           "oracle-linux",
+		"oraclelinux":  "oracle-linux",
+		"arch":         "arch",
+		"manjaro":      "manjaro",
+		"linuxmint":    "linuxmint",
+		"pop":          "pop-os",
+		"elementary":   "elementary-os",
+		"nixos":        "nixos",
+		"void":         "void-linux",
+		"gentoo":       "gentoo",
+		"slackware":    "slackware",
+		"photon":       "photon",
+		"clear-linux":  "clear-linux",
+		"flatcar":      "flatcar",
+	}
+
+	if product, ok := distroMap[strings.ToLower(distroID)]; ok {
+		return product
+	}
+
+	// Try the ID directly as it might match
+	return distroID
+}
+
+// parseEOLDate parses EOL date strings in various formats
+func parseEOLDate(dateStr string) (time.Time, error) {
+	// Try multiple date formats
+	formats := []string{
+		time.RFC3339,           // 2006-01-02T15:04:05Z07:00
+		"2006-01-02T15:04:05Z", // ISO 8601 with Z
+		"2006-01-02",           // Simple date
+	}
+	for _, format := range formats {
+		if t, err := time.Parse(format, dateStr); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("unable to parse date: %s", dateStr)
+}
+
+// getPURLTypeFromPackageType maps Syft package types to PURL types
+func getPURLTypeFromPackageType(pkgType string) string {
+	typeMap := map[string]string{
+		"python":         "pypi",
+		"gem":            "gem",
+		"npm":            "npm",
+		"go-module":      "golang",
+		"cargo":          "cargo",
+		"pub":            "pub",
+		"hex":            "hex",
+		"cocoapods":      "cocoapods",
+		"hackage":        "hackage",
+		"java-archive":   "maven",
+		"jenkins-plugin": "maven",
+		"nuget":          "nuget",
+		"composer":       "composer",
+		"conan":          "conan",
+		"apk":            "apk",
+		"deb":            "deb",
+		"rpm":            "rpm",
+	}
+	return typeMap[pkgType]
 }
 
 // evaluateEOLStatus determines the EOL status based on cycles
@@ -367,7 +589,7 @@ func (s *Scanner) evaluateEOLStatus(result ComponentResult, cycles []db.Cycle, v
 	}
 
 	if matchedCycle.EOL.Valid && matchedCycle.EOL.String != "" {
-		eolDate, err := time.Parse("2006-01-02", matchedCycle.EOL.String)
+		eolDate, err := parseEOLDate(matchedCycle.EOL.String)
 		if err == nil {
 			result.EOLDate = matchedCycle.EOL.String
 
