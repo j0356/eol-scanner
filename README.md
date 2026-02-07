@@ -20,8 +20,6 @@ EOL Scanner analyzes container images to identify software components that have 
 - [Building from Source](#-building-from-source)
 - [Configuration](#-configuration)
 - [Examples](#-examples)
-- [Contributing](#-contributing)
-- [License](#-license)
 
 ---
 
@@ -227,7 +225,7 @@ eol-scanner version
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐  │
-│  │   CLI       │───▶│  Scanner    │───▶│  EOL Database       │  │
+│  │   CLI       │───▶│  Scanner    │───▶│  EOL Database      │  │
 │  │  (Cobra)    │    │   Engine    │    │   Manager           │  │
 │  └─────────────┘    └──────┬──────┘    └──────────┬──────────┘  │
 │                            │                      │             │
@@ -365,7 +363,7 @@ The scanner uses a multi-tier matching approach:
 │                    ▼ (if no match)                         │
 │  5️⃣  Name-Based Fallback                                  │
 │      "python3.12" → Python product                         │
-│      Checks: product names, aliases, repology IDs         │
+│      Checks: product names, aliases, repology IDs          │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -383,10 +381,10 @@ The scanner uses a multi-tier matching approach:
 │     e.g., "3.9.18" matches cycle "3.9"                     │
 │                                                            │
 │  2. Check EOL date or boolean:                             │
-│     • If eol_boolean = true → ❌ EOL                       │
-│     • If eol_date < today → ❌ EOL                         │
-│     • If eol_date < today + forward_days → ⚠️ EOL Soon    │
-│     • Otherwise → ✅ Active                                │
+│     • If eol_boolean = true → ❌ EOL                      │
+│     • If eol_date < today → ❌ EOL                        │
+│     • If eol_date < today + forward_days → ⚠️ EOL Soon    │      
+│     • Otherwise → ✅ Active                               │
 │                                                            │
 │  3. Calculate days until EOL (if applicable)               │
 │                                                            │
