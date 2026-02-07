@@ -73,12 +73,15 @@ func runScan(cmd *cobra.Command, args []string) error {
 	imageRef := args[0]
 	ctx := context.Background()
 
+	// High-level progress indicator (always shown)
+	fmt.Printf("📋 Initializing EOL scanner...\n")
+
 	// Build scanner config
 	config := &scanning.ScannerConfig{
 		DBPath:            dbPath,
 		ForwardLookupDays: forwardLookupDays,
 		AutoUpdateDB:      !noUpdateDB,
-		DBMaxAge: 7 * 24 * time.Hour,
+		DBMaxAge:          7 * 24 * time.Hour,
 	}
 
 	// Add progress callback if verbose
@@ -94,6 +97,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create scanner: %w", err)
 	}
 	defer scanner.Close()
+
+	// High-level progress: SBOM generation
+	fmt.Printf("🔍 Generating SBOM for %s...\n", imageRef)
 
 	// Run scan based on source type
 	var summary *scanning.ScanSummary
@@ -120,6 +126,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("scan failed: %w", err)
 	}
+
+	// High-level progress: analysis complete
+	fmt.Printf("✅ Analysis complete. Found %d components.\n", summary.TotalComponents)
 
 	// Output results
 	switch strings.ToLower(outputFormat) {
@@ -153,18 +162,26 @@ func outputJSON(summary *scanning.ScanSummary) error {
 
 func outputTable(summary *scanning.ScanSummary) error {
 	// Print header
-	fmt.Printf("\nEOL Scan Results for: %s\n", summary.ImageReference)
-	fmt.Printf("Scan Time: %s\n", summary.ScanTime.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Forward Lookup: %d days\n", summary.ForwardLookupDays)
-	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("\n🔍 EOL Scan Results for: %s\n", summary.ImageReference)
+	fmt.Printf("   Scan Time: %s\n", summary.ScanTime.Format("2006-01-02 15:04:05"))
+	fmt.Printf("   Forward Lookup: %d days\n", summary.ForwardLookupDays)
+	fmt.Println(strings.Repeat("─", 85))
 
 	// Print summary
-	fmt.Printf("\nSummary:\n")
-	fmt.Printf("  Total Components:   %d\n", summary.TotalComponents)
-	fmt.Printf("  EOL Components:     %d\n", summary.EOLComponents)
-	fmt.Printf("  EOL Soon:           %d\n", summary.EOLSoonComponents)
-	fmt.Printf("  Active:             %d\n", summary.ActiveComponents)
-	fmt.Printf("  Unknown:            %d\n", summary.UnknownComponents)
+	fmt.Printf("\n📊 Summary:\n")
+	fmt.Printf("   Total Components: %d\n", summary.TotalComponents)
+	if summary.EOLComponents > 0 {
+		fmt.Printf("   ❌ EOL:            %d\n", summary.EOLComponents)
+	} else {
+		fmt.Printf("      EOL:           %d\n", summary.EOLComponents)
+	}
+	if summary.EOLSoonComponents > 0 {
+		fmt.Printf("   ⚠️ EOL Soon:       %d\n", summary.EOLSoonComponents)
+	} else {
+		fmt.Printf("      EOL Soon:      %d\n", summary.EOLSoonComponents)
+	}
+	fmt.Printf("   ✅ Active:         %d\n", summary.ActiveComponents)
+	fmt.Printf("   ❓ Unknown:        %d\n", summary.UnknownComponents)
 
 	// Get components to display
 	var components []scanning.ComponentResult
@@ -176,59 +193,70 @@ func outputTable(summary *scanning.ScanSummary) error {
 
 	if len(components) == 0 {
 		if onlyEOL {
-			fmt.Println("\nNo EOL or EOL-soon components found.")
+			fmt.Println("\n✅ No EOL or EOL-soon components found.")
 		}
 		return nil
 	}
 
 	// Print component details
-	fmt.Printf("\nComponents:\n")
-	fmt.Println(strings.Repeat("-", 80))
-	fmt.Printf("%-30s %-15s %-10s %-12s %s\n", "NAME", "VERSION", "STATUS", "EOL DATE", "DAYS LEFT")
-	fmt.Println(strings.Repeat("-", 80))
+	fmt.Printf("\n📦 Components:\n")
+	fmt.Println(strings.Repeat("─", 90))
+	fmt.Printf("%-32s %-18s %-8s  %-12s %s\n", "NAME", "VERSION", "STATUS", "EOL DATE", "DAYS")
+	fmt.Println(strings.Repeat("─", 90))
 
 	for _, c := range components {
-		name := truncate(c.Name, 30)
-		version := truncate(c.Version, 15)
-		status := statusSymbol(c.Status)
-		eolDate := c.EOLDate
-		if eolDate == "" {
-			eolDate = "-"
-		}
+		name := truncate(c.Name, 32)
+		version := truncate(c.Version, 18)
+		statusIcon, statusText := statusParts(c.Status)
+		eolDate := formatEOLDate(c.EOLDate)
 		daysLeft := "-"
 		if c.DaysUntilEOL != nil {
 			daysLeft = fmt.Sprintf("%d", *c.DaysUntilEOL)
 		}
 
-		fmt.Printf("%-30s %-15s %-10s %-12s %s\n", name, version, status, eolDate, daysLeft)
+		fmt.Printf("%-32s %-18s %s %-6s %-12s %s\n", name, version, statusIcon, statusText, eolDate, daysLeft)
 	}
 
-	fmt.Println(strings.Repeat("-", 80))
+	fmt.Println(strings.Repeat("─", 85))
 
 	// Exit code hint
 	if summary.EOLComponents > 0 {
-		fmt.Printf("\nWarning: %d component(s) have reached end-of-life!\n", summary.EOLComponents)
+		fmt.Printf("\n⚠️ Warning: %d component(s) have reached end-of-life!\n", summary.EOLComponents)
 	}
 	if summary.EOLSoonComponents > 0 {
-		fmt.Printf("Notice: %d component(s) will reach EOL within %d days.\n", summary.EOLSoonComponents, summary.ForwardLookupDays)
+		fmt.Printf("📅 Notice: %d component(s) will reach EOL within %d days.\n", summary.EOLSoonComponents, summary.ForwardLookupDays)
+	}
+	if summary.EOLComponents == 0 && summary.EOLSoonComponents == 0 {
+		fmt.Printf("\n✅ No end-of-life issues detected.\n")
 	}
 
 	return nil
 }
 
-func statusSymbol(status scanning.EOLStatus) string {
+func statusParts(status scanning.EOLStatus) (string, string) {
 	switch status {
 	case scanning.StatusEOL:
-		return "EOL"
+		return "❌", "EOL"
 	case scanning.StatusEOLSoon:
-		return "EOL-SOON"
+		return "⚠️", "SOON"
 	case scanning.StatusActive:
-		return "ACTIVE"
+		return "✅", "OK"
 	case scanning.StatusUnknown:
-		return "UNKNOWN"
+		return "❓", "N/A"
 	default:
-		return string(status)
+		return " ", string(status)
 	}
+}
+
+func formatEOLDate(date string) string {
+	if date == "" {
+		return "-"
+	}
+	// Try to parse and format nicely (remove time portion)
+	if len(date) >= 10 {
+		return date[:10]
+	}
+	return date
 }
 
 func truncate(s string, maxLen int) string {
