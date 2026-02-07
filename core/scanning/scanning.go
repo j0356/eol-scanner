@@ -281,9 +281,42 @@ func (s *Scanner) analyzeSBOM(sbomResult *sbom.SBOM, imageRef string) (*ScanSumm
 		summary.DBLastUpdated = stats.LastFullSync.String
 	}
 
-	// Check OS/Distribution EOL status
+	// Check OS/Distribution EOL status and add as first component
 	if sbomResult.Artifacts.LinuxDistribution != nil {
-		summary.OS = s.checkOSEOL(sbomResult.Artifacts.LinuxDistribution)
+		osInfo := s.checkOSEOL(sbomResult.Artifacts.LinuxDistribution)
+		if osInfo != nil {
+			summary.OS = osInfo
+			// Add OS as a component
+			osComponent := ComponentResult{
+				Name:           osInfo.PrettyName,
+				Version:        osInfo.VersionID,
+				Type:           "os",
+				Status:         osInfo.Status,
+				EOLDate:        osInfo.EOLDate,
+				DaysUntilEOL:   osInfo.DaysUntilEOL,
+				MatchedProduct: osInfo.MatchedProduct,
+				MatchedCycle:   osInfo.MatchedCycle,
+				IsLTS:          osInfo.IsLTS,
+			}
+			if osComponent.Name == "" {
+				osComponent.Name = fmt.Sprintf("%s %s", osInfo.Name, osInfo.Version)
+			}
+			if osComponent.Version == "" {
+				osComponent.Version = osInfo.Version
+			}
+			summary.Components = append(summary.Components, osComponent)
+			summary.TotalComponents++
+			switch osComponent.Status {
+			case StatusEOL:
+				summary.EOLComponents++
+			case StatusEOLSoon:
+				summary.EOLSoonComponents++
+			case StatusActive:
+				summary.ActiveComponents++
+			case StatusUnknown:
+				summary.UnknownComponents++
+			}
+		}
 	}
 
 	// Extract packages from SBOM
