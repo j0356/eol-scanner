@@ -79,6 +79,7 @@ type ScannerConfig struct {
 	AutoUpdateDB      bool                          // Automatically update DB if stale
 	Categories        []string                      // Categories to sync
 	RegistryAuth      *sbomgen.RegistryCredentials  // Registry credentials
+	RegistryCAFileOrDir string                      // Custom CA certificate file or directory
 	ProgressCallback  func(stage, message string)   // Progress callback
 }
 
@@ -112,11 +113,19 @@ func NewScanner(config *ScannerConfig) (*Scanner, error) {
 	// Initialize SBOM generator
 	generator := sbomgen.NewGenerator()
 	if config.RegistryAuth != nil {
-		generator = generator.WithCredentials(
-			config.RegistryAuth.Authority,
-			config.RegistryAuth.Username,
-			config.RegistryAuth.Password,
-		)
+		cred := config.RegistryAuth
+		if cred.Username != "" {
+			generator = generator.WithCredentials(cred.Authority, cred.Username, cred.Password)
+		}
+		if cred.Token != "" {
+			generator = generator.WithToken(cred.Authority, cred.Token)
+		}
+		if cred.ClientCert != "" && cred.ClientKey != "" {
+			generator = generator.WithMTLS(cred.Authority, cred.ClientCert, cred.ClientKey)
+		}
+	}
+	if config.RegistryCAFileOrDir != "" {
+		generator = generator.WithCAFileOrDir(config.RegistryCAFileOrDir)
 	}
 	if config.ProgressCallback != nil {
 		generator = generator.WithProgress(config.ProgressCallback)

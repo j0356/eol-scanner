@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/j0356/eol-scanner/core/scanning"
+	sbomgen "github.com/j0356/eol-scanner/core/sbom"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +22,10 @@ var (
 	onlyEOL           bool
 	registryUser      string
 	registryPass      string
+	registryToken     string
+	registryCert      string
+	registryKey       string
+	registryCA        string
 )
 
 var scanCmd = &cobra.Command{
@@ -65,6 +70,10 @@ func init() {
 	scanCmd.Flags().BoolVar(&onlyEOL, "only-eol", false, "Only show EOL and EOL-soon components")
 	scanCmd.Flags().StringVar(&registryUser, "registry-user", "", "Registry username for authentication")
 	scanCmd.Flags().StringVar(&registryPass, "registry-pass", "", "Registry password for authentication")
+	scanCmd.Flags().StringVar(&registryToken, "registry-token", "", "Registry token for token-based authentication")
+	scanCmd.Flags().StringVar(&registryCert, "registry-cert", "", "Client certificate path for mTLS authentication")
+	scanCmd.Flags().StringVar(&registryKey, "registry-key", "", "Client key path for mTLS authentication")
+	scanCmd.Flags().StringVar(&registryCA, "registry-ca", "", "Custom CA certificate file or directory")
 
 	rootCmd.AddCommand(scanCmd)
 }
@@ -82,6 +91,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 		ForwardLookupDays: forwardLookupDays,
 		AutoUpdateDB:      !noUpdateDB,
 		DBMaxAge:          7 * 24 * time.Hour,
+	}
+
+	// Build registry credentials if any auth flags are provided
+	if registryUser != "" || registryToken != "" || registryCert != "" || registryCA != "" {
+		config.RegistryAuth = &sbomgen.RegistryCredentials{
+			Username:   registryUser,
+			Password:   registryPass,
+			Token:      registryToken,
+			ClientCert: registryCert,
+			ClientKey:  registryKey,
+		}
+		config.RegistryCAFileOrDir = registryCA
 	}
 
 	// Add progress callback if verbose
