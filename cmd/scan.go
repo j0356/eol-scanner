@@ -191,16 +191,8 @@ func outputTable(summary *scanning.ScanSummary) error {
 	// Print summary
 	fmt.Printf("\n📊 Summary:\n")
 	fmt.Printf("   Total Components: %d\n", summary.TotalComponents)
-	if summary.EOLComponents > 0 {
-		fmt.Printf("   ❌ EOL:            %d\n", summary.EOLComponents)
-	} else {
-		fmt.Printf("      EOL:           %d\n", summary.EOLComponents)
-	}
-	if summary.EOLSoonComponents > 0 {
-		fmt.Printf("   ⚠️ EOL Soon:       %d\n", summary.EOLSoonComponents)
-	} else {
-		fmt.Printf("      EOL Soon:      %d\n", summary.EOLSoonComponents)
-	}
+	fmt.Printf("   ❌ EOL:            %d\n", summary.EOLComponents)
+	fmt.Printf("   ⚠️ EOL Soon:       %d\n", summary.EOLSoonComponents)
 	fmt.Printf("   ✅ Active:         %d\n", summary.ActiveComponents)
 	fmt.Printf("   ❓ Unknown:        %d\n", summary.UnknownComponents)
 
