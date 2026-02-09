@@ -33,7 +33,7 @@ EOL Scanner analyzes container images to identify software components that have 
 | 📅 **Forward Looking** | Configure days ahead to warn about upcoming EOL dates |
 | 🔄 **Auto-Sync Database** | Automatically keeps EOL data fresh from endoflife.date API |
 | 📊 **Multiple Output Formats** | Table view for humans, JSON for automation |
-| 🔐 **Private Registry Support** | Authenticate with private container registries |
+| 🔐 **Private Registry Support** | Authenticate via username/password, token, or mTLS |
 | ⚡ **Fast & Offline** | Local SQLite database for quick offline lookups |
 
 ---
@@ -139,10 +139,28 @@ eol-scanner db path
 ### Private Registries
 
 ```bash
-# Authenticate with a private registry
+# Basic auth (username/password)
 eol-scanner scan --source registry \
     --registry-user myuser \
     --registry-pass mytoken \
+    my-registry.example.com/app:latest
+
+# Token-based auth (e.g., GitHub Container Registry)
+eol-scanner scan --source registry \
+    --registry-token ghp_xxxxxxxxxxxx \
+    ghcr.io/org/image:tag
+
+# mTLS authentication
+eol-scanner scan --source registry \
+    --registry-cert /path/to/client.crt \
+    --registry-key /path/to/client.key \
+    my-registry.example.com/app:latest
+
+# mTLS with custom CA certificate
+eol-scanner scan --source registry \
+    --registry-cert /path/to/client.crt \
+    --registry-key /path/to/client.key \
+    --registry-ca /path/to/ca.crt \
     my-registry.example.com/app:latest
 ```
 
@@ -174,6 +192,10 @@ eol-scanner scan [flags] <image>
 | `--no-update` | | Skip automatic database update | `false` |
 | `--registry-user` | | Registry username for authentication | |
 | `--registry-pass` | | Registry password for authentication | |
+| `--registry-token` | | Registry token for token-based authentication | |
+| `--registry-cert` | | Client certificate path for mTLS authentication | |
+| `--registry-key` | | Client key path for mTLS authentication | |
+| `--registry-ca` | | Custom CA certificate file or directory | |
 
 ### `db` Command
 
