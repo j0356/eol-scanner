@@ -82,8 +82,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 	imageRef := args[0]
 	ctx := context.Background()
 
-	// High-level progress indicator (always shown)
-	fmt.Printf("📋 Initializing EOL scanner...\n")
+	quiet := strings.EqualFold(outputFormat, "json")
+
+	// High-level progress indicator (suppress for JSON output)
+	if !quiet {
+		fmt.Printf("📋 Initializing EOL scanner...\n")
+	}
 
 	// Build scanner config
 	config := &scanning.ScannerConfig{
@@ -120,7 +124,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	defer scanner.Close()
 
 	// High-level progress: SBOM generation
-	fmt.Printf("🔍 Generating SBOM for %s...\n", imageRef)
+	if !quiet {
+		fmt.Printf("🔍 Generating SBOM for %s...\n", imageRef)
+	}
 
 	// Run scan based on source type
 	var summary *scanning.ScanSummary
@@ -149,7 +155,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// High-level progress: analysis complete
-	fmt.Printf("✅ Analysis complete. Found %d components.\n", summary.TotalComponents)
+	if !quiet {
+		fmt.Printf("✅ Analysis complete. Found %d components.\n", summary.TotalComponents)
+	}
 
 	// Output results
 	switch strings.ToLower(outputFormat) {
